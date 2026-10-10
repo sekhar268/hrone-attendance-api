@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: hrone-attendance-demo
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: APP_MODE
+        value: production
+      - key: MONGO_DB
+        value: attendance_demo
+      - key: SEED_DEMO
+        value: "true"
+      - key: MONGO_URI
+        sync: false
+      - key: DEMO_USERNAME
+        sync: false
+      - key: DEMO_PASSWORD
+        sync: false
