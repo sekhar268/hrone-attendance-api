@@ -1,14 +1,16 @@
 """Employee attendance API. Instants cross the API boundary as epoch milliseconds."""
-import os, re
+import os, re, secrets
 from datetime import datetime, date, time, timedelta, timezone
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Optional, Literal
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Depends
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator, model_validator
 from pymongo import MongoClient, ASCENDING, DESCENDING, ReturnDocument
 from pymongo.errors import DuplicateKeyError
+from seed_demo import seed_demo_records
 
 load_dotenv()
 client = MongoClient(os.getenv('MONGO_URI', 'mongodb://localhost:27017'), serverSelectionTimeoutMS=2000, tz_aware=True)
@@ -16,7 +18,22 @@ db = client[os.getenv('MONGO_DB', 'attendance_db')]
 UTC = timezone.utc
 IST = timezone(timedelta(hours=5, minutes=30))
 PRESENT = {'PRESENT', 'WFH', 'ON_DUTY'}
-app = FastAPI(title='Employee Attendance & Analytics API', version='2.0.0')
+APP_MODE = os.getenv('APP_MODE', 'development').lower()
+DEMO_USERNAME = os.getenv('DEMO_USERNAME')
+DEMO_PASSWORD = os.getenv('DEMO_PASSWORD')
+if APP_MODE == 'production' and (not DEMO_USERNAME or not DEMO_PASSWORD):
+    raise RuntimeError('DEMO_USERNAME and DEMO_PASSWORD are required in production')
+basic_auth = HTTPBasic(auto_error=False)
+
+def require_demo_auth(credentials: Optional[HTTPBasicCredentials] = Depends(basic_auth)):
+    if APP_MODE != 'production':
+        return
+    if (credentials is None or
+        not secrets.compare_digest(credentials.username, DEMO_USERNAME) or
+        not secrets.compare_digest(credentials.password, DEMO_PASSWORD)):
+        raise HTTPException(401, 'Authentication required', headers={'WWW-Authenticate': 'Basic'})
+
+app = FastAPI(title='Employee Attendance & Analytics API', version='2.0.0', dependencies=[Depends(require_demo_auth)])
 
 @app.on_event('startup')
 def indexes():
@@ -27,6 +44,10 @@ def indexes():
     db.attendance_logs.create_index([('emp_code', ASCENDING), ('date', ASCENDING)], unique=True, name='uq_attendance_day')
     db.attendance_logs.create_index([('date', DESCENDING), ('emp_code', ASCENDING)], name='attendance_date_emp')
     db.attendance_logs.create_index([('emp_code', ASCENDING), ('date', DESCENDING)], name='attendance_emp_date')
+    if os.getenv('SEED_DEMO', '').lower() == 'true':
+        if os.getenv('MONGO_DB', 'attendance_db') != 'attendance_demo':
+            raise RuntimeError('SEED_DEMO is only allowed with MONGO_DB=attendance_demo')
+        seed_demo_records(db)
 
 def trunc_dt(v: datetime) -> datetime:
     if v.tzinfo is None: v = v.replace(tzinfo=UTC)
